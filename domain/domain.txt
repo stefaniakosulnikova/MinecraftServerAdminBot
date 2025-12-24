@@ -1,0 +1,29 @@
+# Domain Layer - Доменный слой
+
+## Описание
+Доменный слой логику и основные сущности приложения для управления Minecraft сервером. Этот слой не зависит от внешних фреймворков или библиотек.
+
+## Структура
+
+### 1. CommandValidator (Валидатор команд)
+Класс для валидации и классификации команд Minecraft.
+
+#### Основные возможности:
+- **Валидация команд** - проверка разрешенных команд
+- **Классификация** - определение типа команды
+- **Безопасность** - идентификация опасных команд
+
+#### Разрешенные команды:
+```python
+{
+    "stop": CommandType.SERVER_MANAGEMENT,       # Остановка сервера
+    "restart": CommandType.SERVER_MANAGEMENT,    # Перезагрузка сервера
+    "save-all": CommandType.SERVER_MANAGEMENT,   # Сохранение мира
+    "list": CommandType.SERVER_INFO,             # Список игроков
+    "say": CommandType.OTHER,                    # Сообщение в чат
+    "time": CommandType.WORLD_MANAGEMENT,        # Управление временем
+    "weather": CommandType.WORLD_MANAGEMENT,     # Управление погодой
+    "gamemode": CommandType.PLAYER_MANAGEMENT,   # Изменение режима игры
+    "kick": CommandType.PLAYER_MANAGEMENT,       # Кик игрока
+    "ban": CommandType.PLAYER_MANAGEMENT,        # Бан игрока
+}

@@ -1,4 +1,3 @@
-# domain/__init__.py
 """
 Domain слой Minecraft Admin Bot
 """
