@@ -1,4 +1,3 @@
-# bot/middlewares/database_middleware.py
 from aiogram import BaseMiddleware
 from aiogram.types import Update
 from typing import Callable, Dict, Any, Awaitable
