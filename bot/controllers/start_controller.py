@@ -3,7 +3,6 @@ from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.filters import Command
 
-from domain.services.session_manager import session_manager
 from bot.keyboards.auth_menu import get_auth_main_keyboard
 from bot.keyboards.main_menu import get_main_menu_keyboard
 
@@ -13,10 +12,17 @@ router = Router()
 @router.message(Command("start"))
 async def cmd_start(message: Message):
     """Главная команда /start"""
+    # Получаем session_manager из бота
+    session_manager = getattr(message.bot, 'session_manager', None)
+
+    if not session_manager:
+        await message.answer("❌ Ошибка системы: менеджер сессий не доступен")
+        return
+
     user_id = message.from_user.id
 
     # 1. Если пользователь уже авторизован - показываем главное меню
-    if session_manager.is_authorized(user_id):
+    if await session_manager.is_authorized(user_id):
         await message.answer(
             f"🏠 Добро пожаловать, {message.from_user.first_name}!\n\n"
             f"Вы уже авторизованы. Используйте меню ниже:",

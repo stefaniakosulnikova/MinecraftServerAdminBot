@@ -4,9 +4,9 @@ Minecraft Server Admin Bot
 """
 
 import asyncio
-import loggers
 import sys
 from pathlib import Path
+from typing import cast
 
 # Добавляем корневую директорию в путь для импортов
 sys.path.insert(0, str(Path(__file__).parent))
@@ -24,7 +24,10 @@ from infrastructure.adapters.database import Database
 # Импорты логгера
 from loggers.app_logger import logger
 
-# ============= ИМПОРТ КОНТРОЛЛЕРОВ ПО ОТДЕЛЬНОСТИ =============
+# Импорт менеджера сессий
+from domain.services.session_manager import SessionManager
+
+# ============= ИМПОРТ КОНТРОЛЛЕРОВ =============
 from bot.controllers.start_controller import router as start_router
 from bot.controllers.auth_controller import router as auth_router
 from bot.controllers.status_controller import router as status_router
@@ -61,7 +64,25 @@ async def setup_database() -> Database:
         raise
 
 
-async def setup_middlewares(dp: Dispatcher, database: Database):
+async def setup_session_manager(database: Database) -> SessionManager:
+    """Создание и инициализация менеджера сессий"""
+    logger.info("🔐 Инициализация менеджера сессий...")
+
+    try:
+        session_manager = SessionManager(
+            database=database,
+            session_duration_hours=settings.SESSION_DURATION_HOURS
+        )
+
+        logger.info("✅ Менеджер сессий создан")
+        return session_manager
+
+    except Exception as e:
+        logger.error(f"❌ Ошибка создания менеджера сессий: {e}", exc_info=True)
+        raise
+
+
+async def setup_middlewares(dp: Dispatcher, database: Database, session_manager: SessionManager):
     """Настройка middleware"""
     logger.info("🛠️  Настройка middleware...")
 
@@ -74,15 +95,9 @@ async def setup_middlewares(dp: Dispatcher, database: Database):
     dp.update.outer_middleware(database_middleware)
 
     # Middleware для проверки авторизации
-    auth_middleware = AuthMiddleware()
+    auth_middleware = AuthMiddleware(session_manager)
     dp.message.middleware(auth_middleware)
     dp.callback_query.middleware(auth_middleware)
-
-    logging_middleware = LoggingMiddleware()
-    dp.update.outer_middleware(logging_middleware)
-
-    database_middleware = DatabaseMiddleware(database)
-    dp.update.outer_middleware(database_middleware)
 
     logger.info("✅ Middleware настроены")
 
@@ -152,9 +167,8 @@ async def main():
     print(f"🏰 MINECRAFT SERVER ADMIN BOT v{__version__}")
     print("=" * 60)
 
-    # Вывод конфигурации (если есть метод print_config)
-    if hasattr(settings, 'print_config'):
-        settings.print_config()
+    # Вывод конфигурации
+    settings.print_config()
 
     # Проверка токена бота
     if not settings.BOT_TOKEN:
@@ -169,11 +183,36 @@ async def main():
         logger.critical(f"❌ Не удалось инициализировать БД: {e}")
         return
 
+    # Инициализация менеджера сессий
+    session_manager = None
+    try:
+        session_manager = await setup_session_manager(database)
+    except Exception as e:
+        logger.critical(f"❌ Не удалось создать менеджер сессий: {e}")
+        await database.close() if database else None
+        return
+
     # Инициализация бота
     try:
         logger.info("🤖 Инициализация Telegram бота...")
 
         bot = Bot(token=settings.BOT_TOKEN)
+
+        # Сохраняем database и session_manager как атрибуты бота
+        # Используем setattr чтобы избежать ошибок PyCharm
+        setattr(bot, 'database', database)
+        setattr(bot, 'session_manager', session_manager)
+
+        # Инициализируем команды бота
+        from aiogram.types import BotCommand
+        await bot.set_my_commands([
+            BotCommand(command="start", description="Запуск бота"),
+            BotCommand(command="help", description="Помощь"),
+            BotCommand(command="commands", description="Команды сервера"),
+            BotCommand(command="status", description="Статус сервера"),
+            BotCommand(command="monitor", description="Мониторинг"),
+            BotCommand(command="sessions", description="Управление сессиями"),
+        ])
 
         # Получаем информацию о боте
         bot_info = await bot.get_me()
@@ -189,7 +228,7 @@ async def main():
     dp = Dispatcher(storage=storage)
 
     # Настройка middleware
-    await setup_middlewares(dp, database)
+    await setup_middlewares(dp, database, session_manager)
 
     # Настройка роутеров
     await setup_routers(dp)

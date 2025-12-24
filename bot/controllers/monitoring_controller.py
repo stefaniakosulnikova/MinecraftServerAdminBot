@@ -3,7 +3,6 @@ from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.filters import Command
 
-from domain.services.session_manager import session_manager
 from bot.keyboards.monitoring_menu import get_monitoring_keyboard
 
 router = Router()
@@ -12,7 +11,14 @@ router = Router()
 @router.message(Command("monitor"))
 async def cmd_monitor(message: Message):
     """Мониторинг сервера"""
-    if not session_manager.is_authorized(message.from_user.id):
+    # Получаем session_manager из бота
+    session_manager = getattr(message.bot, 'session_manager', None)
+
+    if not session_manager:
+        await message.answer("❌ Ошибка системы: менеджер сессий не доступен")
+        return
+
+    if not await session_manager.is_authorized(message.from_user.id):
         await message.answer("🔒 Сначала авторизуйтесь через /start")
         return
 
@@ -52,7 +58,13 @@ async def refresh_monitor_callback(callback: CallbackQuery):
 @router.message(Command("stats"))
 async def cmd_stats(message: Message):
     """Статистика сервера"""
-    if not session_manager.is_authorized(message.from_user.id):
+    session_manager = getattr(message.bot, 'session_manager', None)
+
+    if not session_manager:
+        await message.answer("❌ Ошибка системы: менеджер сессий не доступен")
+        return
+
+    if not await session_manager.is_authorized(message.from_user.id):
         await message.answer("🔒 Сначала авторизуйтесь через /start")
         return
 
@@ -72,7 +84,13 @@ async def cmd_stats(message: Message):
 @router.message(Command("players"))
 async def cmd_players(message: Message):
     """Информация об игроках"""
-    if not session_manager.is_authorized(message.from_user.id):
+    session_manager = getattr(message.bot, 'session_manager', None)
+
+    if not session_manager:
+        await message.answer("❌ Ошибка системы: менеджер сессий не доступен")
+        return
+
+    if not await session_manager.is_authorized(message.from_user.id):
         await message.answer("🔒 Сначала авторизуйтесь через /start")
         return
 
