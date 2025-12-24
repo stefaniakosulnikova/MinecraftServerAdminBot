@@ -1,4 +1,6 @@
-﻿aiogram
+﻿python-dotenv
+pydantic
+aiogram
 rcon
 mcstatus
 pandas
