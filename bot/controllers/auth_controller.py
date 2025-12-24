@@ -1,4 +1,5 @@
 # bot/controllers/auth_controller.py
+import aiogram
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.filters import Command
@@ -13,6 +14,7 @@ from bot.keyboards.auth_menu import (
     get_session_manage_keyboard,
     get_password_toggle_keyboard
 )
+from loggers import logger
 
 router = Router()
 
@@ -305,11 +307,17 @@ async def cmd_auth(message: Message):
 @router.callback_query(F.data == "auth_start")
 async def start_auth(callback: CallbackQuery, state: FSMContext):
     """Начало процесса авторизации"""
+    from config.settings import settings
+
     auth_text = (
-        "🔐 *Подключение сервера (шаг 1/2)*\n\n"
-        "Введи адрес сервера в формате:\n"
-        "`host:port`\n\n"
-        "👇 Введите адрес сервера:"
+        f"🔐 *Подключение сервера (шаг 1/2)*\n\n"
+        f"Введи адрес сервера в формате:\n"
+        f"`host:port`\n\n"
+        f"*Примеры:*\n"
+        f"• `localhost:{settings.RCON_DEFAULT_PORT}`\n"
+        f"• `127.0.0.1:{settings.RCON_DEFAULT_PORT}`\n"
+        f"• `myserver.com:25575`\n\n"
+        f"👇 Введите адрес сервера:"
     )
 
     await callback.message.edit_text(
@@ -462,6 +470,33 @@ async def process_password(message: Message, state: FSMContext):
             parse_mode="Markdown",
             reply_markup=get_auth_cancel_keyboard()
         )
+
+
+@router.callback_query(F.data == "auth_cancel")
+async def cancel_auth(callback: CallbackQuery, state: FSMContext):
+    """Отмена процесса авторизации с обработкой старых callback"""
+    try:
+        await state.clear()
+
+        cancel_text = (
+            "❌ *Авторизация отменена*\n\n"
+            "Вы можете попробовать снова, когда будете готовы."
+        )
+
+        await callback.message.edit_text(
+            cancel_text,
+            parse_mode="Markdown",
+            reply_markup=get_auth_main_keyboard()
+        )
+
+    except aiogram.exceptions.TelegramBadRequest as e:
+        if "query is too old" in str(e):
+            # Игнорируем старые callback
+            logger.warning(f"Старый callback: {callback.id}")
+            return
+        raise
+
+    await callback.answer()
 
 
 @router.callback_query(F.data == "auth_manage_session")

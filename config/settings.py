@@ -41,6 +41,7 @@ class Settings:
         self.RCON_TIMEOUT = self._get_int("RCON_TIMEOUT", 10)
         self.RCON_MAX_RETRIES = self._get_int("RCON_MAX_RETRIES", 3)
         self.RCON_RETRY_DELAY = self._get_int("RCON_RETRY_DELAY", 1)
+        self.RCON_DEFAULT_PORT = self._get_int("RCON_DEFAULT_PORT", 25575)
 
         # ================= СЕССИИ ===================
         self.SESSION_DURATION_HOURS = self._get_int("SESSION_DURATION_HOURS", 6)

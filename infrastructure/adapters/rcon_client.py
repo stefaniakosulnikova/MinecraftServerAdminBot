@@ -1,8 +1,9 @@
 ﻿# infrastructure/adapters/rcon_client.py
 import asyncio
+import socket
 from typing import Optional, Tuple
 from rcon.source import rcon as rcon_async
-from rcon.exceptions import EmptyResponse, SessionTimeout
+from rcon.exceptions import EmptyResponse, SessionTimeout, WrongPassword
 
 from loggers.app_logger import logger
 from config.settings import settings
@@ -11,7 +12,6 @@ from config.settings import settings
 class RconClientAdapter:
     """
     Адаптер для работы с RCON протоколом Minecraft серверов.
-    Объединяет функционал из rcon_client.py и rcon_service.py
     """
 
     def __init__(self, host: str, port: int, password: str):
@@ -19,86 +19,119 @@ class RconClientAdapter:
         self.port = port
         self.password = password
 
-    async def test_connection(self) -> Tuple[bool, Optional[str]]:
+    async def test_connection(self) -> Tuple[bool, str]:
         """
-        Проверка подключения к RCON серверу с детальной отладкой
+        Детальная проверка подключения к RCON серверу
 
         Returns:
-            Tuple[bool, Optional[str]]: (успешность подключения, сообщение об ошибке)
+            Tuple[bool, str]: (успешность подключения, детальное сообщение)
         """
-        logger.info(f"🔍 Попытка подключения к RCON: {self.host}:{self.port}")
+        logger.info(f"🔍 Детальная проверка RCON: {self.host}:{self.port}")
 
-        # Если режим разработки - пропускаем проверку
+        # Если режим разработки - пропускаем реальную проверку
         if settings.DEBUG and hasattr(settings, 'DEV_SKIP_RCON_CHECK') and settings.DEV_SKIP_RCON_CHECK:
-            logger.info(f"[DEV MODE] Пропускаем RCON проверку для {self.host}:{self.port}")
-            return True, None
+            logger.info(f"[DEV MODE] Пропускаем реальную RCON проверку")
+            return True, "Режим разработки: проверка пропущена"
 
-        # 1. Сначала проверяем доступность хоста и порта
+        # 1. Проверка DNS разрешения
         try:
-            logger.info(f"   Проверка доступности {self.host}:{self.port}...")
+            logger.info("  1. Проверка DNS...")
+            ip_address = socket.gethostbyname(self.host)
+            logger.info(f"     ✅ DNS разрешен: {self.host} -> {ip_address}")
+        except socket.gaierror:
+            error_msg = f"DNS ошибка: хост '{self.host}' не найден"
+            logger.error(f"     ❌ {error_msg}")
+            return False, error_msg
+
+        # 2. Проверка доступности порта
+        try:
+            logger.info(f"  2. Проверка порта {self.port}...")
             reader, writer = await asyncio.wait_for(
                 asyncio.open_connection(self.host, self.port),
-                timeout=settings.RCON_TIMEOUT
+                timeout=5.0
             )
             writer.close()
             await writer.wait_closed()
-            logger.info("   ✅ Хост и порт доступны")
+            logger.info(f"     ✅ Порт {self.port} доступен")
         except asyncio.TimeoutError:
-            error_msg = "Таймаут подключения к хосту"
-            logger.error(f"   ❌ {error_msg}")
+            error_msg = f"Таймаут: сервер {self.host} не отвечает на порту {self.port}"
+            logger.error(f"     ❌ {error_msg}")
             return False, error_msg
         except ConnectionRefusedError:
-            error_msg = "Подключение отклонено. Сервер не запущен или порт закрыт"
-            logger.error(f"   ❌ {error_msg}")
+            error_msg = f"Соединение отклонено: порт {self.port} закрыт или сервер не запущен"
+            logger.error(f"     ❌ {error_msg}")
             return False, error_msg
         except Exception as e:
             error_msg = f"Ошибка подключения: {type(e).__name__}: {e}"
-            logger.error(f"   ❌ {error_msg}")
+            logger.error(f"     ❌ {error_msg}")
             return False, error_msg
 
-        # 2. Тестируем RCON авторизацию и выполнение команды
-        logger.info(f"   Тестируем RCON авторизацию...")
+        # 3. Проверка RCON авторизации
+        logger.info("  3. Проверка RCON авторизации...")
         try:
-            # Пробуем выполнить простую команду
-            response = await self._execute_rcon_command("list")
+            # Пытаемся выполнить команду list с проверкой ответа
+            response = await rcon_async(
+                command="list",
+                host=self.host,
+                port=self.port,
+                passwd=self.password,
+                timeout=10
+            )
 
-            if response:
-                logger.info(f"   ✅ RCON подключение успешно")
-                logger.info(f"   Ответ сервера: {response[:100]}...")
-                return True, None
+            # Проверяем, что ответ содержит валидные данные
+            if response is None:
+                error_msg = "RCON: получен пустой ответ"
+                logger.warning(f"     ⚠️  {error_msg}")
+                return True, error_msg  # Считаем успехом, но с предупреждением
+
+            response_str = str(response).strip().lower()
+
+            # Проверяем типичные ответы Minecraft
+            if "there are" in response_str and "players online" in response_str:
+                logger.info(f"     ✅ RCON авторизация успешна")
+                logger.info(f"       Ответ: {response[:100]}")
+                return True, "RCON подключение успешно"
+            elif "cannot execute" in response_str or "unknown command" in response_str:
+                # Сервер ответил, но команда не распознана (может быть другая версия)
+                logger.info(f"     ⚠️  Сервер ответил, но команда не распознана")
+                logger.info(f"       Ответ: {response[:100]}")
+                return True, "RCON подключение установлено (команда не распознана)"
             else:
-                warning_msg = "Сервер ответил пустым сообщением"
-                logger.warning(f"   ⚠️  {warning_msg}")
-                return True, warning_msg  # Считаем успехом, но с предупреждением
+                # Нестандартный ответ, но соединение есть
+                logger.info(f"     ⚠️  Нестандартный ответ сервера")
+                logger.info(f"       Ответ: {response[:100]}")
+                return True, f"RCON подключение установлено: {response[:50]}..."
 
+        except WrongPassword:
+            error_msg = "Неверный пароль RCON"
+            logger.error(f"     ❌ {error_msg}")
+            return False, error_msg
+        except SessionTimeout:
+            error_msg = "Таймаут сессии RCON. Проверьте настройки сервера"
+            logger.error(f"     ❌ {error_msg}")
+            return False, error_msg
+        except ConnectionRefusedError:
+            error_msg = "RCON порт закрыт или сервер не принимает RCON соединения"
+            logger.error(f"     ❌ {error_msg}")
+            return False, error_msg
+        except asyncio.TimeoutError:
+            error_msg = "Таймаут ожидания ответа RCON"
+            logger.error(f"     ❌ {error_msg}")
+            return False, error_msg
         except Exception as e:
             error_msg = self._parse_rcon_error(e)
-            logger.error(f"   ❌ {error_msg}")
+            logger.error(f"     ❌ {error_msg}")
             return False, error_msg
 
     async def execute_command(self, command: str) -> str:
         """
-        Выполняет команду на сервере
-
-        Args:
-            command: Команда для выполнения
-
-        Returns:
-            str: Ответ сервера или сообщение об ошибке
+        Выполняет команду на сервере с повторными попытками
         """
-        try:
-            response = await self._execute_rcon_command(command)
-            return response or "Команда выполнена"
-        except Exception as e:
-            error_msg = self._parse_rcon_error(e)
-            return f"❌ Ошибка выполнения команды: {error_msg}"
+        return await self._execute_with_retry(command)
 
     async def send_command(self, command: str) -> Tuple[bool, str]:
         """
-        Альтернативное название для execute_command (для обратной совместимости)
-
-        Returns:
-            Tuple[bool, str]: (успех, результат/ошибка)
+        Выполняет команду и возвращает результат
         """
         try:
             result = await self.execute_command(command)
@@ -107,18 +140,9 @@ class RconClientAdapter:
             error_msg = self._parse_rcon_error(e)
             return False, f"Ошибка: {error_msg}"
 
-    async def _execute_rcon_command(self, command: str) -> str:
+    async def _execute_with_retry(self, command: str) -> str:
         """
-        Внутренний метод выполнения RCON команды с повторными попытками
-
-        Args:
-            command: Команда для выполнения
-
-        Returns:
-            str: Ответ сервера
-
-        Raises:
-            Exception: При ошибке выполнения после всех попыток
+        Внутренний метод с повторными попытками
         """
         last_exception = None
 
@@ -133,117 +157,101 @@ class RconClientAdapter:
                     passwd=self.password,
                     timeout=settings.RCON_TIMEOUT
                 )
+
                 return response.strip() if response else ""
 
             except EmptyResponse:
-                # Пустой ответ - не ошибка для некоторых команд
-                logger.debug("RCON: получен пустой ответ")
                 return ""
-            except SessionTimeout as e:
-                last_exception = e
-                logger.warning(f"RCON таймаут [{attempt + 1}/{settings.RCON_MAX_RETRIES}]")
-                if attempt < settings.RCON_MAX_RETRIES - 1:
-                    await asyncio.sleep(settings.RCON_RETRY_DELAY)
             except Exception as e:
                 last_exception = e
-                logger.error(f"RCON ошибка [{attempt + 1}/{settings.RCON_MAX_RETRIES}]: {e}")
+                logger.warning(f"Попытка {attempt + 1} неудачна: {e}")
                 if attempt < settings.RCON_MAX_RETRIES - 1:
                     await asyncio.sleep(settings.RCON_RETRY_DELAY)
 
-        # Если дошли сюда - все попытки неудачны
-        raise last_exception or Exception("Неизвестная ошибка RCON")
+        raise last_exception or Exception("Все попытки выполнения команды неудачны")
 
     def _parse_rcon_error(self, error: Exception) -> str:
         """
-        Анализ ошибки RCON и возврат понятного сообщения
-
-        Args:
-            error: Исключение
-
-        Returns:
-            str: Понятное описание ошибки
+        Парсинг ошибок RCON для понятного сообщения
         """
         error_str = str(error).lower()
 
-        if "connection refused" in error_str:
-            return "Сервер не принимает подключения"
-        elif "timed out" in error_str:
-            return "Таймаут ожидания ответа от сервера"
-        elif "incorrect" in error_str or "password" in error_str:
+        if "wrong password" in error_str or "incorrect password" in error_str:
             return "Неверный пароль RCON"
+        elif "connection refused" in error_str:
+            return "Соединение отклонено. Проверьте RCON порт"
+        elif "timed out" in error_str:
+            return "Таймаут ожидания ответа"
         elif "authentication" in error_str:
             return "Ошибка аутентификации RCON"
-        elif "empty response" in error_str:
-            return "Пустой ответ от сервера"
+        elif isinstance(error, WrongPassword):
+            return "Неверный пароль RCON"
         elif isinstance(error, SessionTimeout):
             return "Таймаут сессии RCON"
         else:
-            return f"{type(error).__name__}: {error}"
+            return f"Ошибка RCON: {type(error).__name__}: {error}"
 
-    async def get_server_info(self) -> dict:
+    async def get_server_status(self) -> dict:
         """
-        Получение базовой информации о сервере
-
-        Returns:
-            dict: Информация о сервере
+        Получение статуса сервера с проверкой
         """
-        info = {
-            "host": self.host,
-            "port": self.port,
+        status = {
             "online": False,
             "players": "0/0",
             "version": "Неизвестно",
-            "motd": "Неизвестно"
+            "motd": "Неизвестно",
+            "error": None
         }
 
         try:
-            # Пробуем получить список игроков
-            list_response = await self.execute_command("list")
-            if list_response and "players online" in list_response.lower():
-                info["online"] = True
+            # Проверяем базовое подключение
+            success, message = await self.test_connection()
 
-                # Парсим информацию об игроках
-                # Пример ответа: "There are 2/20 players online:"
-                import re
-                match = re.search(r'(\d+)/(\d+)', list_response)
-                if match:
-                    info["players"] = f"{match.group(1)}/{match.group(2)}"
+            if not success:
+                status["error"] = message
+                return status
 
-            # Пробуем получить версию
-            version_response = await self.execute_command("version")
-            if version_response:
-                info["version"] = version_response.split('\n')[0] if '\n' in version_response else version_response
+            status["online"] = True
 
-            # Пробуем получить MOTD (если есть плагин)
+            # Получаем список игроков
             try:
-                motd_response = await self.execute_command("motd")
-                if motd_response:
-                    info["motd"] = motd_response
+                list_response = await self.execute_command("list")
+                if list_response:
+                    import re
+                    # Ищем паттерн "There are X/Y players online:"
+                    match = re.search(r'(\d+)/(\d+)', list_response)
+                    if match:
+                        status["players"] = f"{match.group(1)}/{match.group(2)}"
             except:
                 pass
 
+            # Получаем версию
+            try:
+                version_response = await self.execute_command("version")
+                if version_response:
+                    status["version"] = version_response.split('\n')[0]
+            except:
+                pass
+
+            return status
+
         except Exception as e:
-            logger.warning(f"Не удалось получить информацию о сервере: {e}")
+            status["error"] = str(e)
+            return status
 
-        return info
 
-
-# Фабрика для создания RCON клиентов (для удобства)
+# Фабрика с улучшенной проверкой
 class RconClientFactory:
-    """Фабрика для создания RCON клиентов"""
-
     @staticmethod
-    async def create_and_test(host: str, port: int, password: str) -> Tuple[Optional[RconClientAdapter], Optional[str]]:
+    async def create_and_test(host: str, port: int, password: str) -> Tuple[
+        Optional['RconClientAdapter'], Optional[str]]:
         """
-        Создает и тестирует RCON клиент
-
-        Returns:
-            Tuple[Optional[RconClientAdapter], Optional[str]]: (клиент, ошибка)
+        Создает клиент и выполняет полную проверку
         """
         client = RconClientAdapter(host, port, password)
-        success, error = await client.test_connection()
+        success, message = await client.test_connection()
 
         if success:
             return client, None
         else:
-            return None, error
+            return None, message

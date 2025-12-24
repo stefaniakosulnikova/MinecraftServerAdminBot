@@ -5,6 +5,8 @@ Minecraft Server Admin Bot
 
 import asyncio
 import sys
+import signal
+import os
 from pathlib import Path
 from typing import cast
 
